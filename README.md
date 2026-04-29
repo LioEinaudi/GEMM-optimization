@@ -19,6 +19,7 @@ The current code uses row-major matrix storage and compares each GPU kernel agai
 - `gemmSmem`: tiled GEMM using shared memory.
 - `gemmSmemPad`: shared-memory GEMM with padding.
 - `gemmSmemUnroll2`: shared-memory GEMM combined with column-direction unrolling.
+- `gemmSmemUnroll4`: shared-memory GEMM combined with four-column unrolling.
 
 ## Build
 
@@ -67,7 +68,19 @@ for each kernel being validated.
 The kernels can be profiled with NVIDIA Nsight Compute or Nsight Systems. A typical optimization progression in this file is:
 
 ```text
-native -> unroll2 -> unroll4 -> shared memory -> shared memory + unroll
+native -> unroll2 -> unroll4 -> shared memory -> shared memory + unroll2 -> shared memory + unroll4
 ```
 
-The current best-performing kernel in this learning version is expected to be `gemmSmemUnroll2` on the tested setup.
+One profiling run on an NVIDIA GeForce RTX 4060 Laptop GPU produced the following kernel durations for `M = N = K = 4096` and `16 x 16` thread blocks:
+
+| Kernel | Duration |
+| --- | ---: |
+| `gemmnative` | 248.45 ms |
+| `gemmUnroll2` | 186.59 ms |
+| `gemmUnroll4` | 177.22 ms |
+| `gemmSmem` | 177.99 ms |
+| `gemmSmemPad` | 263.77 ms |
+| `gemmSmemUnroll2` | 158.54 ms |
+| `gemmSmemUnroll4` | 149.35 ms |
+
+In this version, `gemmSmemUnroll4` is the fastest kernel in the benchmark above, reaching about `1.66x` speedup over the native kernel.
