@@ -231,6 +231,62 @@ __global__ void gemmSmemUnroll2(float *A, float *B, float *C, const int M, const
         }
 }
 
+__global__ void gemmSmemUnroll4(float *A, float *B, float *C, const int M, const int K, const int N)
+{
+    __shared__ float SmemA[TILE_M][TILE_K];
+    __shared__ float SmemB[TILE_K][TILE_N * 4];
+
+    unsigned int col = threadIdx.x + 4 * TILE_N * blockIdx.x;
+    unsigned int row = threadIdx.y + TILE_M * blockIdx.y;
+
+    float sum1 = 0.0f, sum2 = 0.0f, sum3 = 0.0f, sum4 = 0.0f ;
+    for (int tile = 0; tile < (K + TILE_K - 1) / TILE_K; tile++)
+    {
+        int aCol = tile * TILE_K + threadIdx.x;
+        int bRow = tile * TILE_K + threadIdx.y;
+
+        if (aCol < K && row < M)
+        {
+            SmemA[threadIdx.y][threadIdx.x] = A[row * K + aCol];
+        }
+        else
+        {
+            SmemA[threadIdx.y][threadIdx.x] = 0.0f;
+        }
+
+        if (bRow < K && col + TILE_N * 3 < N)
+        {
+            SmemB[threadIdx.y][threadIdx.x] = B[bRow * N + col];
+            SmemB[threadIdx.y][threadIdx.x + TILE_N] = B[bRow * N + col + TILE_N];
+            SmemB[threadIdx.y][threadIdx.x + TILE_N * 2 ] = B[bRow * N + col + TILE_N * 2 ];
+            SmemB[threadIdx.y][threadIdx.x + TILE_N * 3 ] = B[bRow * N + col + TILE_N * 3 ];
+        }
+        else
+        {
+            SmemB[threadIdx.y][threadIdx.x] = 0.0f;
+            SmemB[threadIdx.y][threadIdx.x + TILE_N] = 0.0f;
+            SmemB[threadIdx.y][threadIdx.x + TILE_N * 2] = 0.0f;
+            SmemB[threadIdx.y][threadIdx.x + TILE_N * 3] = 0.0f;
+        }
+        __syncthreads();
+        for (int i = 0; i < TILE_K; i++)
+        {
+            sum1 += SmemA[threadIdx.y][i] * SmemB[i][threadIdx.x];
+            sum2 += SmemA[threadIdx.y][i] * SmemB[i][threadIdx.x + TILE_N];
+            sum3 += SmemA[threadIdx.y][i] * SmemB[i][threadIdx.x + TILE_N *2 ];
+            sum4 += SmemA[threadIdx.y][i] * SmemB[i][threadIdx.x + TILE_N * 3 ];
+        }
+        __syncthreads();
+    }
+    if (col + TILE_N * 3 < N && row < M)
+    {
+        C[row * N + col] = sum1;
+        C[row * N + col + TILE_N] = sum2;
+        C[row * N + col + TILE_N * 2] = sum3;
+        C[row * N + col + TILE_N * 3 ] = sum4;
+    }
+}
+
     int main(int argc, char **argv)
 {
     int dev = 0;
@@ -359,6 +415,18 @@ __global__ void gemmSmemUnroll2(float *A, float *B, float *C, const int M, const
     //kernel 6 
     dim3 gridSmemUnroll2 ( ( N + TILE_N * 2 -1 ) / ( TILE_N * 2 ) , ( M + TILE_M - 1 ) / TILE_M ) ; 
     gemmSmemUnroll2<<<gridSmemUnroll2, block>>>(d_A, d_B, d_C, M, K, N);
+    cudaDeviceSynchronize();
+    cudaMemcpy(gpu_Ref, d_C, nBytesC, cudaMemcpyDeviceToHost);
+    Check(h_C, gpu_Ref, M * N);
+
+    free(gpu_Ref);
+    cudaFree(d_C);
+    gpu_Ref = (float *)malloc(nBytesC);
+    cudaMalloc((void **)&d_C, nBytesC);
+
+    // kernel 7
+    dim3 gridSmemUnroll4((N + TILE_N * 4 - 1) / (TILE_N * 4), (M + TILE_M - 1) / TILE_M);
+    gemmSmemUnroll4<<<gridSmemUnroll4, block>>>(d_A, d_B, d_C, M, K, N);
     cudaDeviceSynchronize();
     cudaMemcpy(gpu_Ref, d_C, nBytesC, cudaMemcpyDeviceToHost);
     Check(h_C, gpu_Ref, M * N);
