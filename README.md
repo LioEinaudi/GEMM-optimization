@@ -20,6 +20,8 @@ The current code uses row-major matrix storage and compares each GPU kernel agai
 - `gemmSmemPad`: shared-memory GEMM with padding.
 - `gemmSmemUnroll2`: shared-memory GEMM combined with column-direction unrolling.
 - `gemmSmemUnroll4`: shared-memory GEMM combined with four-column unrolling.
+- `gemmSmemregisterTile22`: shared-memory GEMM with a `2 x 2` register tile per thread.
+- `gemmSmemregisterTile24`: shared-memory GEMM with a `2 x 4` register tile per thread.
 
 ## Build
 
@@ -37,11 +39,27 @@ For another GPU architecture, replace `sm_89` with the architecture supported by
 ./GEMM
 ```
 
-Optional block dimensions can be passed as command-line arguments:
+The first optional argument selects which kernel to run:
 
 ```bash
-./GEMM 16 16
+./GEMM 0      # run all kernels
+./GEMM 7      # run gemmSmemUnroll4 only
+./GEMM 9      # run gemmSmemregisterTile24 only
 ```
+
+Kernel IDs:
+
+| ID | Kernel |
+| ---: | --- |
+| 1 | `gemmnative` |
+| 2 | `gemmUnroll2` |
+| 3 | `gemmUnroll4` |
+| 4 | `gemmSmem` |
+| 5 | `gemmSmemPad` |
+| 6 | `gemmSmemUnroll2` |
+| 7 | `gemmSmemUnroll4` |
+| 8 | `gemmSmemregisterTile22` |
+| 9 | `gemmSmemregisterTile24` |
 
 The default matrix size in the source is:
 
@@ -68,19 +86,21 @@ for each kernel being validated.
 The kernels can be profiled with NVIDIA Nsight Compute or Nsight Systems. A typical optimization progression in this file is:
 
 ```text
-native -> unroll2 -> unroll4 -> shared memory -> shared memory + unroll2 -> shared memory + unroll4
+native -> unroll2 -> unroll4 -> shared memory -> shared memory + unroll -> register tiling
 ```
 
 One profiling run on an NVIDIA GeForce RTX 4060 Laptop GPU produced the following kernel durations for `M = N = K = 4096` and `16 x 16` thread blocks:
 
 | Kernel | Duration |
 | --- | ---: |
-| `gemmnative` | 248.45 ms |
-| `gemmUnroll2` | 186.59 ms |
+| `gemmnative` | 248.43 ms |
+| `gemmUnroll2` | 185.53 ms |
 | `gemmUnroll4` | 177.22 ms |
 | `gemmSmem` | 177.99 ms |
 | `gemmSmemPad` | 263.77 ms |
-| `gemmSmemUnroll2` | 158.54 ms |
+| `gemmSmemUnroll2` | 158.55 ms |
 | `gemmSmemUnroll4` | 149.35 ms |
+| `gemmSmemregisterTile22` | 92.47 ms |
+| `gemmSmemregisterTile24` | 81.59 ms |
 
-In this version, `gemmSmemUnroll4` is the fastest kernel in the benchmark above, reaching about `1.66x` speedup over the native kernel.
+In this version, `gemmSmemregisterTile24` is the fastest kernel in the benchmark above, reaching about `3.05x` speedup over the native kernel.
