@@ -115,20 +115,21 @@ In this version, `gemmSmemregisterTile24` is the fastest custom kernel in the be
 
 ## Nsight Compute Notes
 
-The optimized kernels were inspected with NVIDIA Nsight Compute. For example, `gemmSmemUnroll4` showed the following characteristics in one profiling run:
+The native baseline and the fastest custom kernel were inspected with NVIDIA Nsight Compute. For `M = N = K = 4096`, the main Speed Of Light metrics were:
 
-| Metric | Value |
-| --- | ---: |
-| Compute throughput | 98.18% |
-| Memory throughput | 98.18% |
-| L1/TEX cache throughput | 98.24% |
-| L2 cache throughput | 15.63% |
-| DRAM throughput | 45.23% |
-| Registers per thread | 40 |
-| Static shared memory per block | 5.12 KB |
-| Achieved occupancy | 99.64% |
+| Metric | `gemmnative` | `gemmSmemregisterTile24` |
+| --- | ---: | ---: |
+| Duration | 250.25 ms | 81.59 ms |
+| Compute throughput | 93.28% | 97.64% |
+| Memory throughput | 93.28% | 97.64% |
+| L1/TEX cache throughput | 93.30% | 97.83% |
+| L2 cache throughput | 13.99% | 14.34% |
+| DRAM throughput | 30.93% | 41.63% |
+| Registers per thread | 36 | 40 |
+| Grid size | `256 x 256 x 1` | `64 x 128 x 1` |
+| Block size | `16 x 16 x 1` | `16 x 16 x 1` |
 
-This suggests that shared-memory tiling and register tiling reduce pressure on DRAM and move the bottleneck closer to on-chip execution resources. The project currently compares custom kernels against a naive CUDA baseline. A stronger production-style evaluation should also compare against cuBLAS SGEMM and, optionally, CUTLASS.
+This comparison shows what the register-tiled kernel actually improves: each thread computes a `2 x 4` output tile, so the grid is much smaller than the native one-thread-per-element kernel, while shared-memory tiling improves data reuse across the K dimension.
 
 The cuBLAS baseline was also profiled with Nsight Compute. For `M = N = K = 4096`, cuBLAS launched `ampere_sgemm_64x64_nn` and showed:
 
@@ -140,10 +141,3 @@ The cuBLAS baseline was also profiled with Nsight Compute. For `M = N = K = 4096
 | L1/TEX cache throughput | 62.58% |
 | L2 cache throughput | 30.92% |
 | DRAM throughput | 9.96% |
-
-## Future Work
-
-- Add a CUTLASS baseline for a template-based optimized GEMM comparison.
-- Add roofline-style analysis with arithmetic intensity and achieved TFLOP/s.
-- Collect detailed Nsight Compute metrics for global memory load/store efficiency and shared-memory bank conflicts.
-- Compare `CUBLAS_DEFAULT_MATH` with tensor-core/TF32 cuBLAS modes.
