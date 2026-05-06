@@ -131,7 +131,6 @@ TFLOP/s = 2 * M * N * K / duration_seconds / 1e12
 | `gemmSmemUnroll4` | 149.35 ms | 1.66x | 0.92 |
 | `gemmSmemregisterTile22` | 92.47 ms | 2.69x | 1.49 |
 | `gemmSmemregisterTile24` | 81.59 ms | 3.05x | 1.68 |
-| `cublasSgemm` | 23.44 ms | 10.60x | 5.86 |
 
 In this version, `gemmSmemregisterTile24` is the fastest custom kernel in the benchmark above, reaching about `3.05x` speedup over the native kernel and about `28.7%` of the cuBLAS SGEMM throughput. cuBLAS is called with `CUBLAS_DEFAULT_MATH` and uses the row-major equivalence `C^T = B^T x A^T`.
 
@@ -147,32 +146,25 @@ cuBLAS SGEMM is included as a production-grade baseline. The custom kernels are 
 
 For `M = N = K = 4096` on the RTX 4060 Laptop GPU:
 
-```text
-naive kernel:        248.43 ms, 0.55 TFLOP/s
-best custom kernel:   81.59 ms, 1.68 TFLOP/s
-cuBLAS SGEMM:         23.44 ms, 5.86 TFLOP/s
-```
+| Implementation | Duration | Approx. TFLOP/s |
+| --- | ---: | ---: |
+| cuBLAS SGEMM | 23.44 ms | 5.86 |
+| Best custom kernel: `gemmSmemregisterTile24` | 81.59 ms | 1.68 |
+| Native custom kernel: `gemmnative` | 248.43 ms | 0.55 |
 
-## Nsight Compute Notes
+## Nsight Compute Summary
 
 See profiling reports:
 
 - [Naive GEMM Nsight Compute report](profiling/GEMMNative_NsightCompute.pdf)
 - [2x4 Register Tiling Nsight Compute report](profiling/GEMMRegisterTile24_NsightCompute.pdf)
 
-The native baseline and the fastest custom kernel were inspected with NVIDIA Nsight Compute. For `M = N = K = 4096`, the main Speed Of Light metrics were:
+The native baseline and the fastest custom kernel were inspected with NVIDIA Nsight Compute. The table below keeps the most interview-relevant metrics directly in the README:
 
-| Metric | `gemmnative` | `gemmSmemregisterTile24` |
-| --- | ---: | ---: |
-| Duration | 250.25 ms | 81.59 ms |
-| Compute throughput | 93.28% | 97.64% |
-| Memory throughput | 93.28% | 97.64% |
-| L1/TEX cache throughput | 93.30% | 97.83% |
-| L2 cache throughput | 13.99% | 14.34% |
-| DRAM throughput | 30.93% | 41.63% |
-| Registers per thread | 36 | 40 |
-| Grid size | `256 x 256 x 1` | `64 x 128 x 1` |
-| Block size | `16 x 16 x 1` | `16 x 16 x 1` |
+| Kernel | Registers / Thread | Achieved Occupancy | DRAM Throughput | Notes |
+| --- | ---: | ---: | ---: | --- |
+| `gemmnative` | 36 | 99.89% | 30.93% | One thread computes one output element |
+| `gemmSmemregisterTile24` | 40 | 99.31% | 41.63% | `2 x 4` register tile with shared-memory reuse |
 
 This comparison shows what the register-tiled kernel actually improves: each thread computes a `2 x 4` output tile, so the grid is much smaller than the native one-thread-per-element kernel, while shared-memory tiling improves data reuse across the K dimension.
 
