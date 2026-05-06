@@ -1,5 +1,6 @@
 #include<stdio.h> 
 #include<cuda_runtime.h>
+#include<cublas_v2.h>
 //#include<sys/time.h> 
 #define TILE_M 16 
 #define TILE_K 16 
@@ -429,6 +430,8 @@ const char *KernelName(int iKernel)
         return "gemmSmemregisterTile22"; 
     case 9:
         return "gemmSmemregisterTile24"; 
+    case 10:
+        return "cublasSgemm";
     default:
         return "unknown";
     }
@@ -494,6 +497,23 @@ bool LaunchKernel(int iKernel, float *d_A, float *d_B, float *d_C,
     return true;
 }
 
+bool LaunchCublas(cublasHandle_t handle, float *d_A, float *d_B, float *d_C,
+                  const int M, const int K, const int N)
+{
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+
+    cublasStatus_t status = cublasSgemm(handle,
+                                        CUBLAS_OP_N, CUBLAS_OP_N,
+                                        N, M, K,
+                                        &alpha,
+                                        d_B, N,
+                                        d_A, K,
+                                        &beta,
+                                        d_C, N);
+    return status == CUBLAS_STATUS_SUCCESS;
+}
+
 int main(int argc, char **argv)
 {
     int dev = 0;
@@ -511,7 +531,7 @@ int main(int argc, char **argv)
     int K = 1 << 12;
 
     int iKernel = 0;
-    int iKernelmax = 9; 
+    int iKernelmax = 10; 
 
     int blockx = 16;
     int blocky = 16;
@@ -560,28 +580,44 @@ int main(int argc, char **argv)
     
     if (iKernel < 0 || iKernel > iKernelmax)
     {
-        printf("Invalid kernel id %d. Use 0 to run all kernels, or 1-7 to run one kernel.\n", iKernel);
+        printf("Invalid kernel id %d. Use 0 to run all kernels, or 1-10 to run one kernel.\n", iKernel);
         return EXIT_FAILURE;
     }
 
+    cublasHandle_t cublasHandle;
+    if (cublasCreate(&cublasHandle) != CUBLAS_STATUS_SUCCESS)
+    {
+        printf("Failed to create cuBLAS handle.\n");
+        return EXIT_FAILURE;
+    }
+    cublasSetMathMode(cublasHandle, CUBLAS_DEFAULT_MATH);
+
     int firstKernel = (iKernel == 0) ? 1 : iKernel;
     int lastKernel = (iKernel == 0) ? iKernelmax : iKernel;
+    int exitCode = EXIT_SUCCESS;
 
     for (int kernel = firstKernel; kernel <= lastKernel; kernel++)
     {
         printf("Kernel %d: %s\n", kernel, KernelName(kernel));
         cudaMemset(d_C, 0, nBytesC);
 
-        if (!LaunchKernel(kernel, d_A, d_B, d_C, M, K, N, block, grid))
+        bool launched = (kernel == 10)
+                            ? LaunchCublas(cublasHandle, d_A, d_B, d_C, M, K, N)
+                            : LaunchKernel(kernel, d_A, d_B, d_C, M, K, N, block, grid);
+
+        if (!launched)
         {
             printf("Invalid kernel id %d\n", kernel);
-            return EXIT_FAILURE;
+            exitCode = EXIT_FAILURE;
+            break;
         }
 
         cudaDeviceSynchronize();
         cudaMemcpy(gpu_Ref, d_C, nBytesC, cudaMemcpyDeviceToHost);
         Check(h_C, gpu_Ref, M * N);
     }
+
+    cublasDestroy(cublasHandle);
 
     free(h_A);
     free(h_B);
@@ -592,5 +628,5 @@ int main(int argc, char **argv)
     free(gpu_Ref); 
 
     cudaDeviceReset();
-    return EXIT_SUCCESS;
+    return exitCode;
 }
