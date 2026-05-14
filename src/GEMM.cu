@@ -408,6 +408,93 @@ __global__ void gemmSmemregisterTile24(float *A, float *B, float *C, const int M
     }
 }
 
+__global__ void gemmSmemregisterTile44(float *A, float *B, float *C, const int M, const int K, const int N)
+{
+    __shared__ float SmemA[TILE_M * 4][TILE_K];
+    __shared__ float SmemB[TILE_K][TILE_N * 4];
+
+    unsigned int col = threadIdx.x + 4 * TILE_N * blockIdx.x;
+    unsigned int row = threadIdx.y + 4 * TILE_M * blockIdx.y;
+
+    float sum1 = 0.0f, sum2 = 0.0f, sum3 = 0.0f, sum4 = 0.0f, sum5 = 0.0f, sum6 = 0.0f, sum7 = 0.0f, sum8 = 0.0f, sum9 = 0.0f, sum10 = 0.0f,sum11 = 0.0f, sum12 = 0.0f, sum13 = 0.0f, sum14 = 0.0f, sum15 = 0.0f, sum16 = 0.0f ;
+    for (int tile = 0; tile < (K + TILE_K - 1) / TILE_K; tile++)
+    {
+        int aCol = tile * TILE_K + threadIdx.x;
+        int bRow = tile * TILE_K + threadIdx.y;
+
+        if (aCol < K && row + TILE_M * 3 < M)
+        {
+            SmemA[threadIdx.y][threadIdx.x] = A[row * K + aCol];
+            SmemA[threadIdx.y + TILE_M][threadIdx.x] = A[(row + TILE_M) * K + aCol];
+            SmemA[threadIdx.y + TILE_M * 2][threadIdx.x] = A[(row +TILE_M * 2 )* K + aCol];
+            SmemA[threadIdx.y + TILE_M * 3 ][threadIdx.x] = A[(row + TILE_M * 3 ) * K + aCol];
+        }
+        else
+        {
+            SmemA[threadIdx.y][threadIdx.x] = 0.0f;
+            SmemA[threadIdx.y + TILE_M][threadIdx.x] = 0.0f;
+            SmemA[threadIdx.y + TILE_M * 2][threadIdx.x] = 0.0f;
+            SmemA[threadIdx.y + TILE_M * 3][threadIdx.x] = 0.0f;
+        }
+
+        if (bRow < K && col + TILE_N * 3 < N)
+        {
+            SmemB[threadIdx.y][threadIdx.x] = B[bRow * N + col];
+            SmemB[threadIdx.y][threadIdx.x + TILE_N] = B[bRow * N + col + TILE_N];
+            SmemB[threadIdx.y][threadIdx.x + TILE_N * 2] = B[bRow * N + col + TILE_N * 2];
+            SmemB[threadIdx.y][threadIdx.x + TILE_N * 3] = B[bRow * N + col + TILE_N * 3];
+        }
+        else
+        {
+            SmemB[threadIdx.y][threadIdx.x] = 0.0f;
+            SmemB[threadIdx.y][threadIdx.x + TILE_N] = 0.0f;
+            SmemB[threadIdx.y][threadIdx.x + TILE_N * 2] = 0.0f;
+            SmemB[threadIdx.y][threadIdx.x + TILE_N * 3] = 0.0f;
+        }
+        __syncthreads();
+        for (int i = 0; i < TILE_K; i++)
+        {
+            sum1 += SmemA[threadIdx.y][i] * SmemB[i][threadIdx.x];
+            sum2 += SmemA[threadIdx.y][i] * SmemB[i][threadIdx.x + TILE_N];
+            sum3 += SmemA[threadIdx.y + TILE_M][i] * SmemB[i][threadIdx.x];
+            sum4 += SmemA[threadIdx.y + TILE_M][i] * SmemB[i][threadIdx.x + TILE_N];
+            sum5 += SmemA[threadIdx.y][i] * SmemB[i][threadIdx.x + TILE_N * 2];
+            sum6 += SmemA[threadIdx.y][i] * SmemB[i][threadIdx.x + TILE_N * 3];
+            sum7 += SmemA[threadIdx.y + TILE_M][i] * SmemB[i][threadIdx.x + TILE_N * 2];
+            sum8 += SmemA[threadIdx.y + TILE_M][i] * SmemB[i][threadIdx.x + TILE_N * 3];
+
+            sum9 += SmemA[threadIdx.y+TILE_M *2 ][i] * SmemB[i][threadIdx.x];
+            sum10 += SmemA[threadIdx.y+TILE_M*2 ][i] * SmemB[i][threadIdx.x + TILE_N];
+            sum11 += SmemA[threadIdx.y + TILE_M * 3 ][i] * SmemB[i][threadIdx.x];
+            sum12 += SmemA[threadIdx.y + TILE_M * 3 ][i] * SmemB[i][threadIdx.x + TILE_N];
+            sum13 += SmemA[threadIdx.y+TILE_M * 2 ][i] * SmemB[i][threadIdx.x + TILE_N * 2];
+            sum14 += SmemA[threadIdx.y + TILE_M * 2 ][i] * SmemB[i][threadIdx.x + TILE_N * 3];
+            sum15 += SmemA[threadIdx.y + TILE_M * 3 ][i] * SmemB[i][threadIdx.x + TILE_N * 2];
+            sum16 += SmemA[threadIdx.y + TILE_M * 3 ][i] * SmemB[i][threadIdx.x + TILE_N * 3];
+        }
+        __syncthreads();
+    }
+    if (col + TILE_N * 3 < N && row + TILE_M * 3 < M)
+    {
+        C[row * N + col] = sum1;
+        C[row * N + col + TILE_N] = sum2;
+        C[(row + TILE_M) * N + col] = sum3;
+        C[(row + TILE_M) * N + col + TILE_N] = sum4;
+        C[row * N + col + TILE_N * 2] = sum5;
+        C[row * N + col + TILE_N * 3] = sum6;
+        C[(row + TILE_M) * N + col + TILE_N * 2] = sum7;
+        C[(row + TILE_M) * N + col + TILE_N * 3] = sum8;
+        C[(row+TILE_M*2) * N + col] = sum9;
+        C[(row+TILE_M*2)* N + col + TILE_N] = sum10;
+        C[(row + TILE_M*3) * N + col] = sum11;
+        C[(row + TILE_M*3) * N + col + TILE_N] = sum12;
+        C[(row +TILE_M*2)* N + col + TILE_N * 2] = sum13;
+        C[(row +TILE_M*2)* N + col + TILE_N * 3] = sum14;
+        C[(row + TILE_M * 3) * N + col + TILE_N * 2] = sum15;
+        C[(row + TILE_M * 3) * N + col + TILE_N * 3] = sum16;
+    }
+}
+
 const char *KernelName(int iKernel)
 {
     switch (iKernel)
@@ -432,8 +519,9 @@ const char *KernelName(int iKernel)
         return "gemmSmemregisterTile24"; 
     case 10:
         return "cublasSgemm";
-    default:
-        return "unknown";
+    case 11:
+        return "gemmSmemregisterTile44 "; 
+    default : return "unknown";
     }
 }
 
@@ -491,6 +579,11 @@ bool LaunchKernel(int iKernel, float *d_A, float *d_B, float *d_C,
         gemmSmemregisterTile24<<<gridSmemregisterTile24, block>>>(d_A, d_B, d_C, M, K, N);
         break;
     }
+    case 11:{
+        dim3 gridSmemregisterTile44((N + TILE_N * 4 - 1) / (TILE_N * 4),(M + TILE_M * 4 - 1) / ( TILE_M * 4 ));
+        gemmSmemregisterTile44<<<gridSmemregisterTile44, block>>>(d_A, d_B,d_C, M, K, N); 
+        break;
+    }
     default:
         return false;
     }
@@ -531,7 +624,7 @@ int main(int argc, char **argv)
     int K = 1 << 12;
 
     int iKernel = 0;
-    int iKernelmax = 10; 
+    int iKernelmax = 11; 
 
     int blockx = 16;
     int blocky = 16;
@@ -580,7 +673,7 @@ int main(int argc, char **argv)
     
     if (iKernel < 0 || iKernel > iKernelmax)
     {
-        printf("Invalid kernel id %d. Use 0 to run all kernels, or 1-10 to run one kernel.\n", iKernel);
+        printf("Invalid kernel id %d. Use 0 to run all kernels, or 1-11 to run one kernel.\n", iKernel);
         return EXIT_FAILURE;
     }
 
