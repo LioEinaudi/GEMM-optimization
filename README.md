@@ -23,6 +23,7 @@ The current code uses row-major matrix storage and compares each GPU kernel agai
 - `gemmSmemregisterTile22`: shared-memory GEMM with a `2 x 2` register tile per thread.
 - `gemmSmemregisterTile24`: shared-memory GEMM with a `2 x 4` register tile per thread.
 - `gemmSmemregisterTile44`: shared-memory GEMM with a `4 x 4` register tile per thread.
+- `gemmSmemregisterTile44TILEK32`: `4 x 4` register tile with a larger K tile of 32.
 - `cublasSgemm`: cuBLAS SGEMM baseline for comparison.
 
 ## Repository Layout
@@ -35,6 +36,7 @@ GEMM-optimization/
     GEMMNative_NsightCompute.pdf
     GEMMRegisterTile24_NsightCompute.pdf
     GEMMRegisterTile44_NsightCompute.pdf
+    GEMMRegisterTile44TILEK32_NsightCompute.pdf
   README.md
 ```
 
@@ -62,6 +64,7 @@ The first optional argument selects which kernel to run:
 ./GEMM 9      # run gemmSmemregisterTile24 only
 ./GEMM 10     # run cuBLAS SGEMM only
 ./GEMM 11     # run gemmSmemregisterTile44 only
+./GEMM 12     # run gemmSmemregisterTile44TILEK32 only
 ```
 
 Kernel IDs:
@@ -79,6 +82,7 @@ Kernel IDs:
 | 9 | `gemmSmemregisterTile24` |
 | 10 | `cublasSgemm` |
 | 11 | `gemmSmemregisterTile44` |
+| 12 | `gemmSmemregisterTile44TILEK32` |
 
 The default matrix size in the source is:
 
@@ -136,14 +140,17 @@ TFLOP/s = 2 * M * N * K / duration_seconds / 1e12
 | `gemmSmemregisterTile22` | 92.47 ms | 2.69x | 1.49 |
 | `gemmSmemregisterTile24` | 81.59 ms | 3.05x | 1.68 |
 | `gemmSmemregisterTile44` | 48.10 ms | 5.16x | 2.86 |
+| `gemmSmemregisterTile44TILEK32` | 42.54 ms | 5.84x | 3.23 |
 
-In this version, `gemmSmemregisterTile44` is the fastest custom kernel in the benchmark above, reaching about `5.16x` speedup over the native kernel and about `48.8%` of the cuBLAS SGEMM throughput. cuBLAS is called with `CUBLAS_DEFAULT_MATH` and uses the row-major equivalence `C^T = B^T x A^T`.
+In this version, `gemmSmemregisterTile44TILEK32` is the fastest custom kernel in the benchmark above, reaching about `5.84x` speedup over the native kernel and about `55.1%` of the cuBLAS SGEMM throughput. cuBLAS is called with `CUBLAS_DEFAULT_MATH` and uses the row-major equivalence `C^T = B^T x A^T`.
 
 ## Observations
 
 `gemmSmemPad` is slower than the naive kernel in this benchmark. This suggests that padding alone does not guarantee better performance: extra shared-memory indexing and synchronization overhead can dominate when memory coalescing and data reuse are not improved enough.
 
-The register-tiled kernels improve performance mainly by increasing per-thread work and reusing loaded shared-memory values across multiple output elements. Moving from a `2 x 4` tile to a `4 x 4` tile further reduces the number of thread blocks and improves arithmetic intensity, but it also increases register usage and lowers achieved occupancy. The custom kernel is still slower than cuBLAS, which uses highly tuned tiling, scheduling, instruction selection, and architecture-specific kernels.
+The register-tiled kernels improve performance mainly by increasing per-thread work and reusing loaded shared-memory values across multiple output elements. Moving from a `2 x 4` tile to a `4 x 4` tile further reduces the number of thread blocks and improves arithmetic intensity, but it also increases register usage and lowers achieved occupancy. Increasing the K tile from `16` to `32` reduces K-tile loop iterations and synchronization points, improving the best custom kernel from `48.10 ms` to `42.54 ms`. The custom kernel is still slower than cuBLAS, which uses highly tuned tiling, scheduling, instruction selection, and architecture-specific kernels.
+
+The experimental `4 x 8` register-tiled kernel is kept commented out in the source. It was disabled because Nsight Compute did not report a stable timing for this version, likely due to excessive register pressure from holding `32` accumulators per thread.
 
 ## cuBLAS Baseline
 
@@ -154,7 +161,7 @@ For `M = N = K = 4096` on the RTX 4060 Laptop GPU:
 | Implementation | Duration | Approx. TFLOP/s |
 | --- | ---: | ---: |
 | cuBLAS SGEMM | 23.44 ms | 5.86 |
-| Best custom kernel: `gemmSmemregisterTile44` | 48.10 ms | 2.86 |
+| Best custom kernel: `gemmSmemregisterTile44TILEK32` | 42.54 ms | 3.23 |
 | Native custom kernel: `gemmnative` | 248.43 ms | 0.55 |
 
 ## Nsight Compute Summary
@@ -164,6 +171,7 @@ See profiling reports:
 - [Naive GEMM Nsight Compute report](profiling/GEMMNative_NsightCompute.pdf)
 - [2x4 Register Tiling Nsight Compute report](profiling/GEMMRegisterTile24_NsightCompute.pdf)
 - [4x4 Register Tiling Nsight Compute report](profiling/GEMMRegisterTile44_NsightCompute.pdf)
+- [4x4 Register Tiling with TILE_K=32 Nsight Compute report](profiling/GEMMRegisterTile44TILEK32_NsightCompute.pdf)
 
 The native baseline and the fastest custom kernel were inspected with NVIDIA Nsight Compute. The table below keeps the most interview-relevant metrics directly in the README:
 
@@ -172,8 +180,9 @@ The native baseline and the fastest custom kernel were inspected with NVIDIA Nsi
 | `gemmnative` | 36 | 99.89% | 30.93% | 0 KB | One thread computes one output element |
 | `gemmSmemregisterTile24` | 40 | 99.31% | 41.63% | 5.12 KB | `2 x 4` register tile with shared-memory reuse |
 | `gemmSmemregisterTile44` | 48 | 82.46% | 35.90% | 8.19 KB | `4 x 4` register tile with more per-thread work |
+| `gemmSmemregisterTile44TILEK32` | 48 | 82.45% | 13.13% | 16.38 KB | `4 x 4` register tile with `TILE_K=32` |
 
-This comparison shows what the register-tiled kernels actually improve: each thread computes multiple output elements, so the grid is much smaller than the native one-thread-per-element kernel, while shared-memory tiling improves data reuse across the K dimension. The `4 x 4` version is faster than the `2 x 4` version, but the higher register count lowers achieved occupancy from `99.31%` to `82.46%`.
+This comparison shows what the register-tiled kernels actually improve: each thread computes multiple output elements, so the grid is much smaller than the native one-thread-per-element kernel, while shared-memory tiling improves data reuse across the K dimension. The `4 x 4` version is faster than the `2 x 4` version, but the higher register count lowers achieved occupancy from `99.31%` to about `82%`. The `TILE_K=32` version keeps the same register count while using more shared memory per block, reducing synchronization overhead and improving runtime.
 
 The cuBLAS baseline was also profiled with Nsight Compute. For `M = N = K = 4096`, cuBLAS launched `ampere_sgemm_64x64_nn` and showed:
 
