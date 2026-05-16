@@ -36,6 +36,8 @@ The current code uses row-major matrix storage and compares each GPU kernel agai
 GEMM-optimization/
   src/
     GEMM.cu
+    kernels.cuh
+    utils.cuh
   profiling/
     GEMMNative_NsightCompute.pdf
     GEMMRegisterTile24_NsightCompute.pdf
@@ -46,6 +48,8 @@ GEMM-optimization/
     GEMMRegisterTile44TILEK32_DB_NsightCompute.pdf
   README.md
 ```
+
+`GEMM.cu` keeps the main benchmark and validation flow. `kernels.cuh` contains the CUDA kernels and kernel dispatch logic, while `utils.cuh` contains data initialization, correctness checking, the optional CPU reference, and the cuBLAS launcher.
 
 ## Build
 
