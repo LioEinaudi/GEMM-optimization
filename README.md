@@ -26,6 +26,8 @@ The current code uses row-major matrix storage and compares each GPU kernel agai
 - `gemmSmemregisterTile44TILEK32`: `4 x 4` register tile with a larger K tile of 32.
 - `gemmSmemregisterTile44TILEK32_SMLoadOptimization`: experimental cooperative shared-memory loading version.
 - `gemmSmemregisterTile44TILEK32_Btrans`: experimental version that stores the B tile transposed in shared memory.
+- `gemmSmemregisterTile44TILEK32_Block32x8`: experimental `32 x 8` thread-block version.
+- `gemmSmemregisterTile44TILEK32_DB`: experimental double-buffered shared-memory version.
 - `cublasSgemm`: cuBLAS SGEMM baseline for comparison.
 
 ## Repository Layout
@@ -41,6 +43,7 @@ GEMM-optimization/
     GEMMRegisterTile44TILEK32_NsightCompute.pdf
     GEMMRegisterTile44_SMLoadOptimization_NsightCompute.pdf
     GEMMRegisterTile44_Btrans_NsightCompute.pdf
+    GEMMRegisterTile44TILEK32_DB_NsightCompute.pdf
   README.md
 ```
 
@@ -71,6 +74,8 @@ The first optional argument selects which kernel to run:
 ./GEMM 12     # run gemmSmemregisterTile44TILEK32 only
 ./GEMM 13     # run gemmSmemregisterTile44TILEK32_SMLoadOptimization only
 ./GEMM 14     # run gemmSmemregisterTile44TILEK32_Btrans only
+./GEMM 15     # run gemmSmemregisterTile44TILEK32_Block32x8 only
+./GEMM 16     # run gemmSmemregisterTile44TILEK32_DB only
 ```
 
 Kernel IDs:
@@ -91,6 +96,8 @@ Kernel IDs:
 | 12 | `gemmSmemregisterTile44TILEK32` |
 | 13 | `gemmSmemregisterTile44TILEK32_SMLoadOptimization` |
 | 14 | `gemmSmemregisterTile44TILEK32_Btrans` |
+| 15 | `gemmSmemregisterTile44TILEK32_Block32x8` |
+| 16 | `gemmSmemregisterTile44TILEK32_DB` |
 
 The default matrix size in the source is:
 
@@ -151,6 +158,8 @@ TFLOP/s = 2 * M * N * K / duration_seconds / 1e12
 | `gemmSmemregisterTile44TILEK32` | 42.54 ms | 5.84x | 3.23 |
 | `gemmSmemregisterTile44TILEK32_SMLoadOptimization` | 50.13 ms | 4.96x | 2.74 |
 | `gemmSmemregisterTile44TILEK32_Btrans` | 160.35 ms | 1.55x | 0.86 |
+| `gemmSmemregisterTile44TILEK32_Block32x8` | 48.51 ms | 5.12x | 2.83 |
+| `gemmSmemregisterTile44TILEK32_DB` | 46.20 ms | 5.38x | 2.98 |
 
 In this version, `gemmSmemregisterTile44TILEK32` is the fastest custom kernel in the benchmark above, reaching about `5.84x` speedup over the native kernel and about `55.1%` of the cuBLAS SGEMM throughput. cuBLAS is called with `CUBLAS_DEFAULT_MATH` and uses the row-major equivalence `C^T = B^T x A^T`.
 
@@ -163,6 +172,8 @@ The register-tiled kernels improve performance mainly by increasing per-thread w
 The cooperative shared-memory loading experiment, `gemmSmemregisterTile44TILEK32_SMLoadOptimization`, is slower than the original `TILE_K=32` version in this benchmark (`50.13 ms` vs `42.54 ms`). This suggests that more even shared-memory loading does not automatically improve performance when the original load pattern is already efficient enough and the extra indexing/loop structure reduces instruction scheduling efficiency.
 
 The transposed-B shared-memory experiment, `gemmSmemregisterTile44TILEK32_Btrans`, is much slower (`160.35 ms`) and increases register usage from `48` to `65` registers per thread. In this kernel, B's global-memory loads are already coalesced, so transposing B in shared memory does not fix a major global-memory bottleneck. It also changes the compute loop from `SmemB[k][n]` to `SmemB[n][k]`, which creates a less favorable shared-memory access pattern for this thread layout and likely introduces more bank conflicts or shared-memory replay overhead.
+
+The `32 x 8` thread-block experiment changes the C tile shape from a balanced `64 x 64` block tile to a wider `32 x 128` block tile. It still validates correctly, but it increases register usage to `64` registers per thread and is slower than the best `16 x 16` block version (`48.51 ms` vs `42.54 ms`). The double-buffered version uses two shared-memory buffers and improves on the `32 x 8` and cooperative-loading experiments, but it is still slower than the original `TILE_K=32` kernel (`46.20 ms` vs `42.54 ms`). Since this implementation uses normal global loads rather than `cp.async`, the double-buffer structure does not yet provide true overlap between global-memory loading and computation.
 
 The experimental `4 x 8` register-tiled kernel is kept commented out in the source. It was disabled because Nsight Compute did not report a stable timing for this version, likely due to excessive register pressure from holding `32` accumulators per thread.
 
@@ -188,6 +199,7 @@ See profiling reports:
 - [4x4 Register Tiling with TILE_K=32 Nsight Compute report](profiling/GEMMRegisterTile44TILEK32_NsightCompute.pdf)
 - [4x4 TILE_K=32 Cooperative Shared-Memory Loading Nsight Compute report](profiling/GEMMRegisterTile44_SMLoadOptimization_NsightCompute.pdf)
 - [4x4 TILE_K=32 Transposed-B Shared-Memory Nsight Compute report](profiling/GEMMRegisterTile44_Btrans_NsightCompute.pdf)
+- [4x4 TILE_K=32 Double-Buffered Shared-Memory Nsight Compute report](profiling/GEMMRegisterTile44TILEK32_DB_NsightCompute.pdf)
 
 The native baseline and the fastest custom kernel were inspected with NVIDIA Nsight Compute. The table below keeps the most interview-relevant metrics directly in the README:
 
@@ -217,5 +229,7 @@ Two additional experimental kernels were profiled to understand whether shared-m
 | --- | ---: | ---: | ---: | ---: | --- |
 | `gemmSmemregisterTile44TILEK32_SMLoadOptimization` | 50.13 ms | 86.71% | 86.71% | 48 | Slower than the original `TILE_K=32` kernel |
 | `gemmSmemregisterTile44TILEK32_Btrans` | 160.35 ms | 16.57% | 96.58% | 65 | Much slower due to higher register pressure and unfavorable shared-memory access |
+| `gemmSmemregisterTile44TILEK32_Block32x8` | 48.51 ms | 96.55% | 96.55% | 64 | Wider block tile, but higher register pressure |
+| `gemmSmemregisterTile44TILEK32_DB` | 46.20 ms | 94.08% | 94.08% | 56 | Normal double buffering without `cp.async` overlap |
 
-The key lesson from these two profiles is that optimization changes need to be validated against the actual access pattern. The best custom kernel remains `gemmSmemregisterTile44TILEK32`: it keeps register usage at `48` registers per thread, avoids the costly transposed shared-memory access pattern, and reaches `42.54 ms` on the benchmark above.
+The key lesson from these profiles is that optimization changes need to be validated against the actual access pattern. The best custom kernel remains `gemmSmemregisterTile44TILEK32`: it keeps register usage at `48` registers per thread, avoids the costly transposed shared-memory access pattern, and reaches `42.54 ms` on the benchmark above.
